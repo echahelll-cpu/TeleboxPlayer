@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TeleBox Player</title>
+<style>
+  :root {
+    --bg: #0E1116; --panel: #161B22; --panel2: #1F2630; --line: #2A323D;
+    --text: #E8ECF1; --dim: #8B95A3; --accent: #3D8BFF; --accent2: #1E6FFF;
+    --danger: #FF5C5C; --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  input { font: inherit; }
+  .hidden { display: none !important; }
+
+  /* Top bar */
+  header { position: sticky; top: 0; z-index: 5; background: rgba(14,17,22,.92);
+    backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .bar { display: flex; align-items: center; gap: 6px; padding: 10px 8px; min-height: 56px; }
+  .bar h1 { flex: 1; font-size: 17px; margin: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icon-btn { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+  .icon-btn:active { background: var(--panel2); }
+  .icon-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .crumbs { display: flex; gap: 4px; overflow-x: auto; padding: 0 12px 10px; scrollbar-width: none; }
+  .crumbs::-webkit-scrollbar { display: none; }
+  .crumb { flex: none; padding: 4px 10px; border-radius: 99px; background: var(--panel); color: var(--dim); font-size: 13px; }
+  .crumb.last { color: var(--text); background: var(--panel2); }
+  .search { padding: 0 12px 10px; }
+  .search input { width: 100%; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); outline: none; }
+
+  main { padding: 12px 12px 90px; }
+  .meta { color: var(--dim); font-size: 13px; margin: 0 2px 10px; }
+
+  /* Grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border-radius: var(--radius); overflow: hidden; text-align: left;
+    display: flex; flex-direction: column; border: 1px solid transparent; }
+  .card:active { border-color: var(--accent); transform: scale(.98); }
+  .thumb { position: relative; aspect-ratio: 16/10; background: var(--panel2); display: grid; place-items: center; overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb svg { width: 44px; height: 44px; }
+  .badge { position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.75); padding: 1px 6px;
+    border-radius: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .play-dot { position: absolute; inset: 0; display: grid; place-items: center; opacity: .9; }
+  .play-dot span { width: 38px; height: 38px; border-radius: 50%; background: rgba(0,0,0,.55); display: grid; place-items: center; }
+  .card .body { padding: 8px 10px 10px; }
+  .card .name { font-size: 13.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .card .sub { color: var(--dim); font-size: 12px; margin-top: 3px; }
+  .card.playing { border-color: var(--accent); }
+
+  /* Home */
+  .hero { text-align: center; padding: 40px 10px 20px; }
+  .logo { width: 72px; height: 72px; border-radius: 20px; background: var(--accent2); display: grid; place-items: center; margin: 0 auto 14px; }
+  .hero h2 { margin: 0 0 6px; font-size: 22px; }
+  .hero p { margin: 0; color: var(--dim); }
+  .add { display: flex; gap: 8px; margin: 22px 0; }
+  .add input { flex: 1; min-width: 0; padding: 13px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--text); outline: none; }
+  .btn { padding: 12px 16px; border-radius: 12px; background: var(--accent2); color: #fff; font-weight: 600; flex: none; }
+  .btn.ghost { background: var(--panel2); color: var(--text); font-weight: 500; }
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 10px; background: var(--panel); border-radius: 12px; padding: 10px 6px 10px 14px; }
+  .row .grow { flex: 1; min-width: 0; text-align: left; }
+  .row .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .u { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  h3 { font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin: 24px 2px 10px; }
+
+  /* Status */
+  .state { text-align: center; color: var(--dim); padding: 50px 20px; }
+  .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent);
+    animation: spin .8s linear infinite; margin: 0 auto 14px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  pre.debug { text-align: left; white-space: pre-wrap; word-break: break-all; font-size: 11.5px; background: var(--panel);
+    padding: 10px; border-radius: 10px; color: var(--dim); max-height: 40vh; overflow: auto; }
+
+  /* Player */
+  .player { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; flex-direction: column; }
+  .player .top { display: flex; align-items: center; gap: 4px; padding: 8px; background: #000; }
+  .player .top .ttl { flex: 1; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stage { position: relative; background: #000; flex: none; aspect-ratio: 16/9; max-height: 60vh; display: grid; place-items: center; }
+  .stage video { width: 100%; height: 100%; background: #000; }
+  .stage .state { position: absolute; inset: 0; display: grid; place-content: center; padding: 20px; }
+  .controls { display: flex; gap: 8px; padding: 12px; flex-wrap: wrap; background: var(--bg); }
+  .controls .btn { flex: 1 1 40%; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .controls svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .toggle { display: flex; align-items: center; justify-content: space-between; padding: 4px 14px 12px; color: var(--dim); background: var(--bg); }
+  .switch { width: 46px; height: 26px; border-radius: 99px; background: var(--line); position: relative; transition: .2s; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: .2s; }
+  .switch.on { background: var(--accent2); }
+  .switch.on::after { left: 23px; }
+  .queue { flex: 1; overflow: auto; background: var(--bg); padding: 0 12px 20px; }
+  .q { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: 10px; width: 100%; text-align: left; }
+  .q.cur { background: var(--panel2); }
+  .q img, .q .ph { width: 92px; aspect-ratio: 16/10; object-fit: cover; border-radius: 8px; background: var(--panel2); flex: none; }
+  .q .n { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .q .d { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <button class="icon-btn hidden" id="backBtn" aria-label="Back">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <h1 id="title">TeleBox Player</h1>
+    <button class="icon-btn hidden" id="searchBtn" aria-label="Search">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    </button>
+    <button class="icon-btn hidden" id="refreshBtn" aria-label="Refresh">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+    </button>
+    <button class="icon-btn hidden" id="homeBtn" aria-label="Home">
+      <svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>
+    </button>
+  </div>
+  <div class="search hidden" id="searchWrap"><input id="searchInput" type="search" placeholder="Search in this folder"></div>
+  <div class="crumbs hidden" id="crumbs"></div>
+</header>
+
+<main id="main"></main>
+
+<div class="player hidden" id="player">
+  <div class="top">
+    <button class="icon-btn" id="closePlayer" aria-label="Close">
+      <svg viewBox="0 0 24 24" style="width:22px;height:22px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="ttl" id="pTitle"></div>
+  </div>
+  <div class="stage">
+    <video id="video" controls playsinline preload="auto"></video>
+    <div class="state hidden" id="pState"></div>
+  </div>
+  <div class="controls">
+    <button class="btn ghost" id="prevBtn"><svg viewBox="0 0 24 24"><path d="M19 20L9 12l10-8v16z"/><path d="M5 19V5"/></svg>Prev</button>
+    <button class="btn ghost" id="nextBtn">Next<svg viewBox="0 0 24 24"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg></button>
+    <button class="btn" id="extBtn"><svg viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M10 14L20 4"/><path d="M20 14v6H4V4h6"/></svg>Open in VLC</button>
+    <button class="btn ghost" id="copyBtn"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>Copy link</button>
+  </div>
+  <div class="toggle"><span>Autoplay next video</span><button class="switch" id="autoSw" aria-label="Autoplay"></button></div>
+  <div class="queue" id="queue"></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const UA_HOSTS = ["https://www.linkbox.to", "https://www.linkbox.cloud", "https://www.telebox.online"];
+  const VIDEO_EXT = /\.(mp4|mkv|avi|mov|webm|m4v|ts|flv|3gp|m3u8)$/i;
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+
+  /* ---------- Native HTTP bridge (no CORS inside the app) ---------- */
+  const pending = new Map();
+  let seq = 0;
+  window.__native = (id, res) => {
+    const p = pending.get(id);
+    if (p) { pending.delete(id); p(res); }
+  };
+  function httpGet(url) {
+    if (window.Native && Native.fetch) {
+      return new Promise((resolve) => {
+        const id = "r" + (++seq);
+        pending.set(id, resolve);
+        Native.fetch(id, url);
+      });
+    }
+    // Browser fallback (for testing on a computer; CORS may block it)
+    return fetch(url).then(async (r) => ({ status: r.status, url: r.url, body: await r.text() }))
+      .catch((e) => ({ status: 0, error: String(e) }));
+  }
+  async function getJSON(url) {
+    const r = await httpGet(url);
+    if (!r.status) throw new Error(r.error || "Network error");
+    try { return JSON.parse(r.body); } catch (e) { throw new Error("HTTP " + r.status + ": not JSON"); }
+  }
+  const qs = (o) => Object.entries(o).map(([k, v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&");
+
+  /* ---------- TeleBox / LinkBox API ---------- */
+  const Api = {
+    share: null,     // { link, token, host }
+    cache: new Map(),
+    async open(link) {
+      const r = await httpGet(link);
+      if (!r.status) throw new Error(r.error || "Could not open link");
+      const finalUrl = r.url || link;
+      const token = finalUrl.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop();
+      const host = (finalUrl.match(/^https?:\/\/[^/]+/) || [""])[0];
+      this.share = { link, token, host };
+      this.cache.clear();
+      return this.share;
+    },
+    hosts() { return [...new Set([this.share.host, ...UA_HOSTS])]; },
+    async list(pid, force) {
+      const key = String(pid);
+      const hit = this.cache.get(key);
+      if (hit && !force && Date.now() - hit.t < 600000) return hit.items;
+      let lastErr = null;
+      for (const h of this.hosts()) {
+        try {
+          const d = await getJSON(h + "/api/file/share_out_list/?" + qs({ shareToken: this.share.token, pageSize: 1000, pid }));
+          const items = (d && d.data && d.data.list) || null;
+          if (items) {
+            items.sort((a, b) => ((a.type === "dir") === (b.type === "dir"))
+              ? String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" })
+              : (a.type === "dir" ? -1 : 1));
+            this.share.host = h;
+            this.cache.set(key, { t: Date.now(), items });
+            return items;
+          }
+          lastErr = new Error((d && (d.msg || d.message)) || "Empty response");
+        } catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error("Could not load folder");
+    },
+    async videoUrl(item, debug) {
+      let u = findUrl(item);
+      if (u) return u;
+      const iid = item.item_id || item.id;
+      for (const h of this.hosts()) {
+        for (const path of ["/api/file/detail", "/api/file/share_out_detail"]) {
+          try {
+            const d = await getJSON(h + path + "?" + qs({ itemId: iid, needUser: 0, needTpInfo: 1, token: "", shareToken: this.share.token }));
+            u = findUrl(d);
+            if (u) return u;
+            debug.push(h + path + ": " + JSON.stringify(d).slice(0, 300));
+          } catch (e) { debug.push(h + path + ": " + e.message); }
+        }
+      }
+      return null;
+    }
+  };
+
+  function findUrl(obj) {
+    const found = [];
+    (function scan(o) {
+      if (Array.isArray(o)) o.forEach(scan);
+      else if (o && typeof o === "object") Object.values(o).forEach(scan);
+      else if (typeof o === "string" && /^https?:\/\//.test(o)) found.push(o);
+    })(obj);
+    const score = (u) => {
+      const low = u.toLowerCase().split("?")[0];
+      if (u.includes(".m3u8")) return 0;
+      if (VIDEO_EXT.test(low)) return 1;
+      if (/\.(jpe?g|png|webp|gif)$/.test(low)) return 9;
+      if (/video|stream|play|download|\/file/.test(low)) return 2;
+      return 5;
+    };
+    const ok = found.filter((u) => score(u) < 9).sort((a, b) => score(a) - score(b));
+    return ok[0] || null;
+  }
+
+  const isDir = (it) => it.type === "dir";
+  const isVideo = (it) => it.type === "video" || VIDEO_EXT.test(it.name || "");
+  const human = (n) => {
+    n = Number(n); if (!n) return "";
+    const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : n) + " " + u[i];
+  };
+  const dur = (s) => {
+    s = Math.round(Number(s)); if (!s) return "";
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0");
+  };
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const ICON_FOLDER = '<svg viewBox="0 0 24 24" fill="#3D8BFF"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  const ICON_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="#8B95A3" stroke-width="1.6"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>';
+  const ICON_PLAY = '<svg viewBox="0 0 24 24" width="18" height="18" fill="#fff"><path d="M8 5l11 7-11 7z"/></svg>';
+
+  /* ---------- State & views ---------- */
+  const state = { view: "home", stack: [], items: [], query: "", searchOpen: false };
+  const main = $("main");
+
+  function setHeader() {
+    const browsing = state.view === "browse";
+    $("backBtn").classList.toggle("hidden", !browsing);
+    $("searchBtn").classList.toggle("hidden", !browsing);
+    $("refreshBtn").classList.toggle("hidden", !browsing);
+    $("homeBtn").classList.toggle("hidden", !browsing);
+    $("crumbs").classList.toggle("hidden", !browsing || state.stack.length < 2);
+    $("searchWrap").classList.toggle("hidden", !browsing || !state.searchOpen);
+    $("title").textContent = browsing ? state.stack[state.stack.length - 1].name : "TeleBox Player";
+    if (browsing) {
+      $("crumbs").innerHTML = state.stack.map((f, i) =>
+        `<button class="crumb${i === state.stack.length - 1 ? " last" : ""}" data-i="${i}">${esc(f.name)}</button>`).join("");
+    }
+  }
+
+  function renderHome() {
+    navToken++;
+    state.view = "home";
+    setHeader();
+    const saved = store.get("shares", []);
+    main.innerHTML = `
+      <div class="hero">
+        <div class="logo">${ICON_PLAY.replace('width="18" height="18"', 'width="34" height="34"')}</div>
+        <h2>TeleBox Player</h2>
+        <p>Paste a share link to browse and stream its videos.</p>
+      </div>
+      <form class="add" id="addForm">
+        <input id="linkInput" type="url" inputmode="url" placeholder="https://lbx.cx/i/..." autocomplete="off">
+        <button class="btn" type="submit">Open</button>
+      </form>
+      ${saved.length ? `<h3>Saved links</h3><div class="list">${saved.map((s, i) => `
+        <div class="row">
+          <button class="grow" data-open="${i}"><div class="t">${esc(s.name || "Shared folder")}</div><div class="u">${esc(s.link)}</div></button>
+          <button class="icon-btn" data-del="${i}" aria-label="Remove"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+        </div>`).join("")}</div>` : ""}
+    `;
+    $("addForm").onsubmit = (e) => {
+      e.preventDefault();
+      const v = $("linkInput").value.trim();
+      if (v) openShare(v);
+    };
+    main.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => openShare(saved[b.dataset.open].link));
+    main.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => {
+      saved.splice(Number(b.dataset.del), 1); store.set("shares", saved); renderHome();
+    });
+  }
+
+  function loading(text) {
+    main.innerHTML = `<div class="state"><div class="spinner"></div>${esc(text)}</div>`;
+  }
+  function errorView(msg, retry) {
+    main.innerHTML = `<div class="state"><p style="color:var(--danger)">${esc(msg)}</p><button class="btn ghost" id="retry">Try again</button></div>`;
+    $("retry").onclick = retry;
+  }
+
+  async function openShare(link) {
+    link = (link.match(/https?:\/\/\S+/) || [link])[0];
+    state.view = "browse";
+    state.stack = [{ id: 0, name: "Shared folder" }];
+    state.query = ""; state.searchOpen = false; $("searchInput").value = "";
+    setHeader();
+    loading("Opening link…");
+    try {
+      await Api.open(link);
+      const saved = store.get("shares", []);
+      if (!saved.some((s) => s.link === link)) { saved.unshift({ link, name: "Shared folder" }); store.set("shares", saved.slice(0, 20)); }
+      await loadFolder();
+    } catch (e) {
+      errorView(e.message, () => openShare(link));
+    }
+  }
+  window.openShare = openShare;
+
+  let navToken = 0;
+  async function loadFolder(force) {
+    const my = ++navToken;
+    const cur = state.stack[state.stack.length - 1];
+    setHeader();
+    loading("Loading…");
+    try {
+      const items = await Api.list(cur.id, force);
+      if (my !== navToken || state.view !== "browse") return;
+      state.items = items;
+      renderFolder();
+    } catch (e) {
+      if (my !== navToken || state.view !== "browse") return;
+      errorView(e.message, () => loadFolder(true));
+    }
+  }
+
+  function visibleItems() {
+    const q = state.query.toLowerCase();
+    return q ? state.items.filter((i) => String(i.name).toLowerCase().includes(q)) : state.items;
+  }
+
+  function renderFolder() {
+    const items = visibleItems();
+    const nDirs = items.filter(isDir).length, nVids = items.filter(isVideo).length;
+    const parts = [];
+    if (nDirs) parts.push(nDirs + (nDirs > 1 ? " folders" : " folder"));
+    if (nVids) parts.push(nVids + (nVids > 1 ? " videos" : " video"));
+    const others = items.length - nDirs - nVids;
+    if (others) parts.push(others + (others > 1 ? " files" : " file"));
+    main.innerHTML = items.length ? `
+      <div class="meta">${parts.join(" · ")}</div>
+      <div class="grid">${items.map((it, i) => card(it, i)).join("")}</div>`
+      : `<div class="state">${state.query ? "No match for “" + esc(state.query) + "”" : "This folder is empty"}</div>`;
+    main.querySelectorAll(".card").forEach((c) => c.onclick = () => tap(items[Number(c.dataset.i)]));
+    main.querySelectorAll(".thumb img").forEach((img) => img.onerror = () => { img.replaceWith(document.createRange().createContextualFragment(ICON_FILE)); });
+  }
+
+  function card(it, i) {
+    if (isDir(it)) {
+      return `<button class="card" data-i="${i}"><div class="thumb">${ICON_FOLDER}</div>
+        <div class="body"><div class="name">${esc(it.name)}</div><div class="sub">Folder</div></div></button>`;
+    }
+    const vid = isVideo(it);
+    const cover = it.cover ? `<img loading="lazy" src="${esc(it.cover)}" alt="">` : (vid ? "" : ICON_FILE);
+    return `<button class="card" data-i="${i}"><div class="thumb">${cover}
+      ${vid ? `<div class="play-dot"><span>${ICON_PLAY}</span></div>` : ""}
+      ${it.duration ? `<span class="badge">${dur(it.duration)}</span>` : ""}</div>
+      <div class="body"><div class="name">${esc(it.name)}</div><div class="sub">${human(it.size)}</div></div></button>`;
+  }
+
+  function tap(it) {
+    if (isDir(it)) {
+      state.stack.push({ id: it.id, name: it.name });
+      state.query = ""; state.searchOpen = false; $("searchInput").value = "";
+      loadFolder();
+    } else {
+      const vids = state.items.filter(isVideo);
+      Player.open(vids.length && isVideo(it) ? vids : [it], Math.max(0, vids.indexOf(it)));
+    }
+  }
+
+  /* ---------- Player ---------- */
+  const video = $("video");
+  let hls = null;
+  const Player = {
+    list: [], idx: 0, url: null, token: 0,
+    auto: store.get("autoplay", true),
+    open(list, idx) {
+      this.list = list; this.idx = idx;
+      $("player").classList.remove("hidden");
+      $("autoSw").classList.toggle("on", this.auto);
+      this.renderQueue();
+      this.play();
+    },
+    close() {
+      this.token++;
+      this.stop();
+      $("player").classList.add("hidden");
+    },
+    stop() {
+      if (hls) { hls.destroy(); hls = null; }
+      video.pause(); video.removeAttribute("src"); video.load();
+    },
+    status(html) {
+      $("pState").classList.toggle("hidden", !html);
+      $("pState").innerHTML = html || "";
+    },
+    async play() {
+      const it = this.list[this.idx];
+      const my = ++this.token;
+      this.url = null;
+      this.stop();
+      $("pTitle").textContent = it.name;
+      video.poster = it.cover || "";
+      this.status('<div class="spinner"></div>Getting link…');
+      this.renderQueue();
+      const debug = [];
+      let url = null;
+      try { url = await Api.videoUrl(it, debug); } catch (e) { debug.push(e.message); }
+      if (my !== this.token) return;
+      if (!url) {
+        this.status(`<p style="color:var(--danger)">No playable link found.</p><pre class="debug">${esc(debug.join("\n\n") || "(no reply)")}</pre>`);
+        return;
+      }
+      this.url = url;
+      this.status("");
+      if (url.includes(".m3u8") && !video.canPlayType("application/vnd.apple.mpegurl")) {
+        try {
+          await loadHls();
+          if (my !== this.token) return;
+          hls = new window.Hls();
+          hls.loadSource(url);
+          hls.attachMedia(video);
+          hls.on(window.Hls.Events.ERROR, (_, d) => { if (d.fatal) this.status('<p>Stream error in the app player.</p><p>Try “Open in VLC”.</p>'); });
+        } catch (e) {
+          this.status("<p>Couldn't load the HLS player.</p><p>Try “Open in VLC”.</p>");
+          return;
+        }
+      } else {
+        video.src = url;
+      }
+      video.play().catch(() => {});
+    },
+    step(d) {
+      const n = this.idx + d;
+      if (n >= 0 && n < this.list.length) { this.idx = n; this.play(); }
+    },
+    renderQueue() {
+      const q = $("queue");
+      q.innerHTML = this.list.length > 1 ? `<h3>In this folder · ${this.list.length}</h3>` + this.list.map((it, i) => `
+        <button class="q${i === this.idx ? " cur" : ""}" data-q="${i}">
+          ${it.cover ? `<img loading="lazy" src="${esc(it.cover)}" alt="">` : '<div class="ph"></div>'}
+          <div><div class="n">${esc(it.name)}</div><div class="d">${[dur(it.duration), human(it.size)].filter(Boolean).join(" · ")}</div></div>
+        </button>`).join("") : "";
+      q.querySelectorAll("[data-q]").forEach((b) => b.onclick = () => { this.idx = Number(b.dataset.q); this.play(); });
+      const cur = q.querySelector(".cur");
+      if (cur) cur.scrollIntoView({ block: "nearest" });
+      $("prevBtn").disabled = this.idx <= 0;
+      $("nextBtn").disabled = this.idx >= this.list.length - 1;
+      $("prevBtn").style.opacity = this.idx <= 0 ? .4 : 1;
+      $("nextBtn").style.opacity = this.idx >= this.list.length - 1 ? .4 : 1;
+    }
+  };
+  let hlsPromise = null;
+  function loadHls() {
+    if (window.Hls) return Promise.resolve();
+    if (!hlsPromise) hlsPromise = new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js";
+      s.onload = res; s.onerror = () => { hlsPromise = null; rej(new Error("hls.js")); };
+      document.head.appendChild(s);
+    });
+    return hlsPromise;
+  }
+
+  video.addEventListener("ended", () => { if (Player.auto) Player.step(1); });
+  video.addEventListener("error", () => {
+    if (Player.url && !hls) Player.status('<p>The in-app player can’t play this file.</p><p>Tap “Open in VLC”.</p>');
+  });
+  $("closePlayer").onclick = () => Player.close();
+  $("prevBtn").onclick = () => Player.step(-1);
+  $("nextBtn").onclick = () => Player.step(1);
+  $("extBtn").onclick = () => {
+    if (!Player.url) return;
+    video.pause();
+    if (window.Native) Native.openExternal(Player.url, Player.list[Player.idx].name);
+    else window.open(Player.url);
+  };
+  $("copyBtn").onclick = () => {
+    if (!Player.url) return;
+    if (window.Native) Native.copy(Player.url);
+    else if (navigator.clipboard) navigator.clipboard.writeText(Player.url);
+  };
+  $("autoSw").onclick = () => { Player.auto = !Player.auto; store.set("autoplay", Player.auto); $("autoSw").classList.toggle("on", Player.auto); };
+
+  /* ---------- Header actions ---------- */
+  function goBack() {
+    if (!$("player").classList.contains("hidden")) { Player.close(); return true; }
+    if (state.view !== "browse") return false;
+    if (state.searchOpen) { state.searchOpen = false; state.query = ""; $("searchInput").value = ""; setHeader(); renderFolder(); return true; }
+    if (state.stack.length > 1) { state.stack.pop(); loadFolder(); return true; }
+    renderHome(); return true;
+  }
+  window.onAndroidBack = goBack;
+  $("backBtn").onclick = goBack;
+  $("homeBtn").onclick = () => { Player.close(); renderHome(); };
+  $("refreshBtn").onclick = () => loadFolder(true);
+  $("searchBtn").onclick = () => {
+    state.searchOpen = !state.searchOpen;
+    if (!state.searchOpen) { state.query = ""; $("searchInput").value = ""; renderFolder(); }
+    setHeader();
+    if (state.searchOpen) $("searchInput").focus();
+  };
+  $("searchInput").oninput = (e) => { state.query = e.target.value.trim(); renderFolder(); };
+  $("crumbs").onclick = (e) => {
+    const b = e.target.closest("[data-i]"); if (!b) return;
+    const i = Number(b.dataset.i);
+    if (i < state.stack.length - 1) { state.stack = state.stack.slice(0, i + 1); loadFolder(); }
+  };
+
+  /* ---------- Start ---------- */
+  const shared = window.Native && Native.takeSharedLink ? Native.takeSharedLink() : "";
+  if (shared) openShare(shared); else renderHome();
+})();
+</script>
+</body>
+</html>
