@@ -209,7 +209,6 @@
     if (f) f(); else if (state.view === "home") renderHome();
   };
   window.onLoginFailed = (keys) => {
-    afterLogin = null;
     if (state.view === "home") renderHome();
     showTokenHelp(keys);
   };
@@ -222,12 +221,19 @@
     box.innerHTML = `<div class="sheet">
       <p style="margin:0 0 6px;font-weight:600">Sign-in not detected</p>
       <p style="margin:0 0 12px;color:var(--dim);font-size:13px">Finish logging in on the TeleBox page (until you see your files), then tap Close. Google sign-in may not work inside apps; use email and password.</p>
+      <p style="margin:0 0 8px;font-size:13px">Or paste your token: on the TeleBox <b>My Account</b> page, tap <b>Copy</b> next to Token.</p>
+      <div class="add" style="margin:0 0 12px"><input id="mTok" placeholder="Paste token here" autocomplete="off"><button class="btn" id="mSave">Save</button></div>
       <details style="margin-bottom:14px"><summary style="color:var(--dim);font-size:12px">What the page stored (${list.length})</summary><pre class="debug">${esc(list.join("\n") || "(nothing)")}</pre></details>
-      <div style="display:flex;gap:8px"><button class="btn ghost" id="mClose" style="flex:1">Cancel</button><button class="btn" id="mRetry" style="flex:1">Try again</button></div>
+      <div style="display:flex;gap:8px"><button class="btn ghost" id="mClose" style="flex:1">Cancel</button><button class="btn ghost" id="mRetry" style="flex:1">Open sign-in again</button></div>
     </div>`;
     document.body.appendChild(box);
     box.querySelector("#mClose").onclick = () => box.remove();
     box.querySelector("#mRetry").onclick = () => { box.remove(); Auth.login(); };
+    box.querySelector("#mSave").onclick = () => {
+      const t = box.querySelector("#mTok").value.trim();
+      if (t.length < 8) return;
+      Auth.set(t); box.remove(); window.onLogin(t);
+    };
   }
 
   /* ---------- TeleBox / LinkBox API ---------- */

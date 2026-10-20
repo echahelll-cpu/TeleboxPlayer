@@ -60,15 +60,20 @@ public class MainActivity extends Activity {
     /** Looks through the signed-in site's storage and cookies for its session token. */
     static final String FIND_TOKEN_JS =
             "(function(){try{var keys=[];var best='';"
-            + "function look(k,v,d){if(d>4||v==null)return;"
+            // 1) The account page prints it as: Token <value> Copy
+            + "var txt=(document.body&&document.body.innerText)||'';"
+            + "var m=txt.match(/\\bToken\\s*[:\\n\\t ]\\s*([A-Za-z0-9_\\-]{10,64})/);"
+            + "var src='';if(m&&!/^copy$/i.test(m[1])){best=m[1];src='page';}"
+            // 2) Otherwise storage / cookies under token-like names (t, sid, token, ...)
+            + "function look(k,v,d){if(d>4||v==null||best)return;"
             + " if(typeof v==='string'){var t=v.trim();"
             + "  if((t[0]==='{'||t[0]==='[')&&d<4){try{look(k,JSON.parse(t),d+1);}catch(e){}return;}"
-            + "  if(/token/i.test(k)&&/^[A-Za-z0-9._\\-]{16,}$/.test(t)&&t.length>best.length)best=t;return;}"
+            + "  if(/^(t|sid|token)$|token/i.test(k)&&/^[A-Za-z0-9._\\-]{10,}$/.test(t)&&/[A-Za-z]/.test(t)){best=t;src='storage';}return;}"
             + " if(typeof v==='object'){for(var x in v){look(x,v[x],d+1);}}}"
             + "[localStorage,sessionStorage].forEach(function(s){for(var i=0;i<s.length;i++){var k=s.key(i);keys.push(k);look(k,s.getItem(k),0);}});"
             + "document.cookie.split(';').forEach(function(c){var p=c.split('=');var k=(p.shift()||'').trim();keys.push('cookie:'+k);"
             + " look(k,decodeURIComponent(p.join('=')),0);});"
-            + "return JSON.stringify({token:best,keys:keys});}catch(e){return JSON.stringify({token:'',keys:[String(e)]});}})()";
+            + "return JSON.stringify({token:best,src:src,keys:keys});}catch(e){return JSON.stringify({token:'',keys:[String(e)]});}})()";
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -165,15 +170,19 @@ public class MainActivity extends Activity {
     private void checkLogin(boolean closing) {
         if (loginWeb == null) return;
         loginWeb.evaluateJavascript(FIND_TOKEN_JS, raw -> {
-            String token = "", keys = "";
+            String token = "", keys = "", src = "";
             try {
                 // evaluateJavascript returns a JSON-encoded string
                 String json = new org.json.JSONArray("[" + raw + "]").getString(0);
                 JSONObject o = new JSONObject(json);
                 token = o.optString("token", "");
+                src = o.optString("src", "");
                 keys = o.optJSONArray("keys") == null ? "" : o.optJSONArray("keys").toString();
             } catch (Exception ignored) { }
 
+            // While browsing the login site, only trust the token shown on the account page;
+            // storage values are used only when the user taps Close.
+            if (!closing && !"page".equals(src)) token = "";
             if (!token.isEmpty()) {
                 prefs().edit().putString("token", token).apply();
                 hideLogin();
