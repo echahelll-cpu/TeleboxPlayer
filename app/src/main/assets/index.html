@@ -258,7 +258,7 @@
       let lastErr = null;
       for (const h of this.hosts()) {
         try {
-          const d = await getJSON(h + "/api/file/share_out_list/?" + qs({ shareToken: this.share.token, pageSize: 1000, pid }));
+          const d = await getJSON(h + "/api/file/share_out_list/?" + qs({ shareToken: this.share.token, pageSize: 1000, pid, needTpInfo: 1, token: Auth.token() }));
           const items = (d && d.data && d.data.list) || null;
           if (items) {
             items.sort((a, b) => ((a.type === "dir") === (b.type === "dir"))
@@ -278,6 +278,7 @@
       if (u) return u;
       const iid = item.item_id || item.id;
       const token = Auth.token();
+      hostLoop:
       for (const h of this.hosts()) {
         for (const path of ["/api/file/detail", "/api/file/share_out_detail"]) {
           try {
@@ -285,15 +286,23 @@
             u = findUrl(d);
             if (u) return u;
             const text = JSON.stringify(d);
-            if (/token in need|not login|login/i.test(String(d && d.msg))) info.needLogin = true;
             const ii = d && d.data && (d.data.itemInfo || d.data);
-            debug.push(h + path + ": " + (ii && typeof ii === "object"
-              ? "fields = " + Object.keys(ii).join(", ")
-              : text.slice(0, 300)));
+            // Only the main detail endpoint decides whether we're signed in.
+            if (path === "/api/file/detail" && !ii && /token in need|login in need|not login/i.test(String(d && d.msg))) info.needLogin = true;
+            if (ii && typeof ii === "object") {
+              info.gotItem = true;
+              const show = (k) => k in ii ? `${k} = ${JSON.stringify(ii[k]).slice(0, 400)}` : null;
+              debug.push(h + path + ":\n" + ["url", "resolutionList", "status", "op_type", "landscape", "v_lb", "v_sw", "sub_type"]
+                .map(show).filter(Boolean).join("\n"));
+            } else {
+              debug.push(h + path + ": " + text.slice(0, 300));
+            }
+            if (path === "/api/file/detail" && ii && typeof ii === "object") break hostLoop; // mirrors give the same answer
           } catch (e) { debug.push(h + path + ": " + e.message); }
         }
       }
       if (!token) info.needLogin = true;
+      if (info.gotItem && token) info.needLogin = false;
       return null;
     }
   };
@@ -303,7 +312,12 @@
     (function scan(o) {
       if (Array.isArray(o)) o.forEach(scan);
       else if (o && typeof o === "object") Object.values(o).forEach(scan);
-      else if (typeof o === "string" && /^https?:\/\//.test(o)) found.push(o);
+      else if (typeof o === "string") {
+        const s = o.trim();
+        if (/^https?:\/\//i.test(s)) found.push(s);
+        else if (s.startsWith("//")) found.push("https:" + s);
+        else if (/^[a-z0-9.-]+\.[a-z]{2,}\/\S+\.(mp4|m3u8|mkv|webm|mov)/i.test(s)) found.push("https://" + s);
+      }
     })(obj);
     const score = (u) => {
       const low = u.toLowerCase().split("?")[0];
@@ -539,7 +553,9 @@
             Auth.login();
           };
         } else {
-          this.status(`<p style="color:var(--danger)">No playable link found.</p><pre class="debug">${esc(debug.join("\n\n") || "(no reply)")}</pre>`);
+          const dbg = debug.join("\n\n") || "(no reply)";
+          this.status(`<div style="width:100%"><p style="color:var(--danger);margin:0 0 8px">Signed in, but no playable link in TeleBox's reply.</p><pre class="debug">${esc(dbg)}</pre><button class="btn ghost" id="pCopyDbg" style="margin-top:8px">Copy details</button></div>`);
+          $("pCopyDbg").onclick = () => { if (window.Native) Native.copy(dbg); else if (navigator.clipboard) navigator.clipboard.writeText(dbg); };
         }
         return;
       }
