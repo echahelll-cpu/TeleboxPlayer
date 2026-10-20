@@ -194,6 +194,16 @@
     set(t) {
       if (window.Native && Native.setToken) Native.setToken(t); else store.set("token", t);
     },
+    candidates() {
+      const out = [], seen = new Set();
+      const add = (k, v) => { v = String(v || "").trim(); if (v && !seen.has(v)) { seen.add(v); out.push({ k, v }); } };
+      add("main", this.token());
+      try {
+        const raw = window.Native && Native.getTokens ? Native.getTokens() : JSON.stringify(store.get("tokens", []));
+        (JSON.parse(raw || "[]") || []).forEach((c) => add(c.k, c.v));
+      } catch (e) {}
+      return out;
+    },
     login() {
       if (window.Native && Native.login) Native.login();
       else alert("Sign-in works inside the Android app.");
@@ -277,32 +287,39 @@
       let u = findUrl(item);
       if (u) return u;
       const iid = item.item_id || item.id;
-      const token = Auth.token();
-      hostLoop:
-      for (const h of this.hosts()) {
-        for (const path of ["/api/file/detail", "/api/file/share_out_detail"]) {
-          try {
-            const d = await getJSON(h + path + "?" + qs({ itemId: iid, needUser: 0, needTpInfo: 1, token, shareToken: this.share.token }));
-            u = findUrl(d);
-            if (u) return u;
-            const text = JSON.stringify(d);
-            const ii = d && d.data && (d.data.itemInfo || d.data);
-            // Only the main detail endpoint decides whether we're signed in.
-            if (path === "/api/file/detail" && !ii && /token in need|login in need|not login/i.test(String(d && d.msg))) info.needLogin = true;
-            if (ii && typeof ii === "object") {
-              info.gotItem = true;
-              const show = (k) => k in ii ? `${k} = ${JSON.stringify(ii[k]).slice(0, 400)}` : null;
-              debug.push(h + path + ":\n" + ["url", "resolutionList", "status", "op_type", "landscape", "v_lb", "v_sw", "sub_type"]
-                .map(show).filter(Boolean).join("\n"));
-            } else {
-              debug.push(h + path + ": " + text.slice(0, 300));
-            }
-            if (path === "/api/file/detail" && ii && typeof ii === "object") break hostLoop; // mirrors give the same answer
-          } catch (e) { debug.push(h + path + ": " + e.message); }
+      const main = Auth.token();
+      const tokens = Auth.candidates();           // [{k, v}] main token first
+      if (!main) info.needLogin = true;
+      const hosts = [...new Set([this.share.host, "https://www.linkbox.to"])];
+      const tries = [];
+      for (const t of tokens.length ? tokens : [{ k: "none", v: "" }]) {
+        for (const h of hosts) {
+          tries.push({ t, url: h + "/api/file/detail?" + qs({ itemId: iid, needUser: 1, needTpInfo: 1, token: t.v }) });
         }
       }
-      if (!token) info.needLogin = true;
-      if (info.gotItem && token) info.needLogin = false;
+      // Open API (the token shown on the account page is an open-API token)
+      for (const t of tokens) {
+        tries.push({ t, url: "https://www.linkbox.to/api/open/file_detail?" + qs({ itemId: iid, token: t.v }) });
+      }
+      for (const tr of tries) {
+        try {
+          const d = await getJSON(tr.url);
+          u = findUrl(d);
+          const where = tr.url.replace(/\?.*$/, "") + "  [" + tr.t.k + "]";
+          if (u) {
+            if (tr.t.v && tr.t.v !== main) Auth.set(tr.t.v);   // remember the token that works
+            return u;
+          }
+          const ii = d && d.data && (d.data.itemInfo || d.data);
+          if (ii && typeof ii === "object" && !Array.isArray(ii)) {
+            info.gotItem = true;
+            debug.push(where + ": url=" + JSON.stringify(ii.url).slice(0, 120) + " res=" + JSON.stringify(ii.resolutionList).slice(0, 120));
+          } else {
+            debug.push(where + ": " + JSON.stringify(d).slice(0, 160));
+          }
+        } catch (e) { debug.push(tr.url.replace(/\?.*$/, "") + ": " + e.message); }
+      }
+      if (info.gotItem && main) info.needLogin = false;
       return null;
     }
   };
@@ -554,11 +571,24 @@
           };
         } else {
           const dbg = debug.join("\n\n") || "(no reply)";
-          this.status(`<div style="width:100%"><p style="color:var(--danger);margin:0 0 8px">Signed in, but no playable link in TeleBox's reply.</p><pre class="debug">${esc(dbg)}</pre><button class="btn ghost" id="pCopyDbg" style="margin-top:8px">Copy details</button></div>`);
+          this.status(`<div style="max-width:340px;margin:0 auto">
+            <p style="margin:0 0 6px;font-weight:600">TeleBox didn't send a direct link</p>
+            <p style="margin:0 0 14px;color:var(--dim);font-size:13px">Play it through the TeleBox website instead: open the video there and tap play, and this app takes over.</p>
+            <button class="btn" id="pWeb">Play via TeleBox website</button>
+            <details style="margin-top:12px;text-align:left"><summary style="color:var(--dim);font-size:12px">Details</summary><pre class="debug">${esc(dbg)}</pre>
+            <button class="btn ghost" id="pCopyDbg" style="margin-top:8px">Copy details</button></details></div>`);
           $("pCopyDbg").onclick = () => { if (window.Native) Native.copy(dbg); else if (navigator.clipboard) navigator.clipboard.writeText(dbg); };
+          $("pWeb").onclick = () => {
+            sniffFor = my;
+            if (window.Native && Native.sniff) Native.sniff(Api.share.link);
+            else window.open(Api.share.link);
+          };
         }
         return;
       }
+      this.startUrl(url, my);
+    },
+    async startUrl(url, my) {
       this.url = url;
       this.status("");
       if (url.includes(".m3u8") && !video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -597,6 +627,12 @@
       $("prevBtn").style.opacity = this.idx <= 0 ? .4 : 1;
       $("nextBtn").style.opacity = this.idx >= this.list.length - 1 ? .4 : 1;
     }
+  };
+  let sniffFor = -1;
+  window.onSniffed = (url) => {
+    // Only use it if the user is still on the same video
+    if (sniffFor !== Player.token || $("player").classList.contains("hidden")) return;
+    Player.startUrl(url, Player.token);
   };
   let hlsPromise = null;
   function loadHls() {

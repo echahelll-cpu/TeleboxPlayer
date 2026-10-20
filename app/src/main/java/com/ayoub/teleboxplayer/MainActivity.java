@@ -57,23 +57,34 @@ public class MainActivity extends Activity {
 
     static final String LOGIN_URL = "https://www.linkbox.to/admin/account";
 
-    /** Looks through the signed-in site's storage and cookies for its session token. */
+    /** Collects the session/API tokens the signed-in site shows or stores. */
     static final String FIND_TOKEN_JS =
-            "(function(){try{var keys=[];var best='';"
-            // 1) The account page prints it as: Token <value> Copy
+            "(function(){try{var keys=[],cands=[],best='',src='';"
+            // 1) The account page prints the API token as: Token <value> Copy
             + "var txt=(document.body&&document.body.innerText)||'';"
             + "var m=txt.match(/\\bToken\\s*[:\\n\\t ]\\s*([A-Za-z0-9_\\-]{10,64})/);"
-            + "var src='';if(m&&!/^copy$/i.test(m[1])){best=m[1];src='page';}"
-            // 2) Otherwise storage / cookies under token-like names (t, sid, token, ...)
-            + "function look(k,v,d){if(d>4||v==null||best)return;"
+            + "if(m&&!/^copy$/i.test(m[1])){best=m[1];src='page';cands.push({k:'page',v:m[1]});}"
+            // 2) Token-like values in storage and cookies (t, sid, token, auth, session, ...)
+            + "function look(k,v,d){if(d>4||v==null)return;"
             + " if(typeof v==='string'){var t=v.trim();"
             + "  if((t[0]==='{'||t[0]==='[')&&d<4){try{look(k,JSON.parse(t),d+1);}catch(e){}return;}"
-            + "  if(/^(t|sid|token)$|token/i.test(k)&&/^[A-Za-z0-9._\\-]{10,}$/.test(t)&&/[A-Za-z]/.test(t)){best=t;src='storage';}return;}"
+            + "  if(/^(t|sid)$|token|auth|session|logkey/i.test(k)&&/^[A-Za-z0-9._\\-]{10,300}$/.test(t)&&/[A-Za-z]/.test(t)"
+            + "   &&cands.length<10&&!cands.some(function(c){return c.v===t;})){cands.push({k:k,v:t});if(!best){best=t;src='storage';}}return;}"
             + " if(typeof v==='object'){for(var x in v){look(x,v[x],d+1);}}}"
             + "[localStorage,sessionStorage].forEach(function(s){for(var i=0;i<s.length;i++){var k=s.key(i);keys.push(k);look(k,s.getItem(k),0);}});"
             + "document.cookie.split(';').forEach(function(c){var p=c.split('=');var k=(p.shift()||'').trim();keys.push('cookie:'+k);"
             + " look(k,decodeURIComponent(p.join('=')),0);});"
-            + "return JSON.stringify({token:best,src:src,keys:keys});}catch(e){return JSON.stringify({token:'',keys:[String(e)]});}})()";
+            + "return JSON.stringify({token:best,src:src,keys:keys,cands:cands});}catch(e){return JSON.stringify({token:'',keys:[String(e)],cands:[]});}})()";
+
+    /** Media requests made by the official player that we can hand to our own player. */
+    static final java.util.regex.Pattern MEDIA = java.util.regex.Pattern.compile(
+            "\\.(m3u8|mp4|mkv|webm|mov)(\\?|$)", java.util.regex.Pattern.CASE_INSENSITIVE);
+    static final java.util.regex.Pattern TELEBOX_HOST = java.util.regex.Pattern.compile(
+            "nuplink|linkbox|telebox|lbx\\.|aht\\.", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    private LinearLayout sniffPanel;
+    private WebView sniffWeb;
+    private volatile boolean sniffDone;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -170,13 +181,14 @@ public class MainActivity extends Activity {
     private void checkLogin(boolean closing) {
         if (loginWeb == null) return;
         loginWeb.evaluateJavascript(FIND_TOKEN_JS, raw -> {
-            String token = "", keys = "", src = "";
+            String token = "", keys = "", src = "", cands = "[]";
             try {
                 // evaluateJavascript returns a JSON-encoded string
                 String json = new org.json.JSONArray("[" + raw + "]").getString(0);
                 JSONObject o = new JSONObject(json);
                 token = o.optString("token", "");
                 src = o.optString("src", "");
+                if (o.optJSONArray("cands") != null) cands = o.optJSONArray("cands").toString();
                 keys = o.optJSONArray("keys") == null ? "" : o.optJSONArray("keys").toString();
             } catch (Exception ignored) { }
 
@@ -184,7 +196,7 @@ public class MainActivity extends Activity {
             // storage values are used only when the user taps Close.
             if (!closing && !"page".equals(src)) token = "";
             if (!token.isEmpty()) {
-                prefs().edit().putString("token", token).apply();
+                prefs().edit().putString("token", token).putString("tokens", cands).apply();
                 hideLogin();
                 web.evaluateJavascript("window.onLogin && window.onLogin(" + JSONObject.quote(token) + ")", null);
                 Toast.makeText(this, "Signed in", Toast.LENGTH_SHORT).show();
@@ -201,6 +213,68 @@ public class MainActivity extends Activity {
         loginWeb.destroy();
         loginWeb = null;
         loginPanel = null;
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void showSniff(String pageUrl) {
+        if (sniffPanel != null) return;
+        sniffDone = false;
+        sniffPanel = new LinearLayout(this);
+        sniffPanel.setOrientation(LinearLayout.VERTICAL);
+        sniffPanel.setBackgroundColor(Color.parseColor("#0E1116"));
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(24, 16, 16, 16);
+        TextView msg = new TextView(this);
+        msg.setText("Open the video and tap play. The app takes over when it starts.");
+        msg.setTextColor(Color.parseColor("#E8ECF1"));
+        msg.setTextSize(14);
+        bar.addView(msg, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button close = new Button(this);
+        close.setText("Close");
+        close.setOnClickListener(v -> hideSniff());
+        bar.addView(close);
+        sniffPanel.addView(bar);
+
+        sniffWeb = new WebView(this);
+        WebSettings s = sniffWeb.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(true);
+        s.setUserAgentString(UA);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(sniffWeb, true);
+        sniffWeb.setWebChromeClient(new WebChromeClient());
+        sniffWeb.setWebViewClient(new WebViewClient() {
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(
+                    WebView view, android.webkit.WebResourceRequest request) {
+                String u = request.getUrl().toString();
+                if (!sniffDone && MEDIA.matcher(u).find() && TELEBOX_HOST.matcher(u).find()) {
+                    sniffDone = true;
+                    main.post(() -> {
+                        hideSniff();
+                        web.evaluateJavascript("window.onSniffed && window.onSniffed(" + JSONObject.quote(u) + ")", null);
+                    });
+                }
+                return null; // never block or change the page's own requests
+            }
+        });
+        sniffPanel.addView(sniffWeb, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(sniffPanel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        sniffWeb.loadUrl(pageUrl);
+    }
+
+    private void hideSniff() {
+        if (sniffPanel == null) return;
+        root.removeView(sniffPanel);
+        sniffWeb.stopLoading();
+        sniffWeb.destroy();
+        sniffWeb = null;
+        sniffPanel = null;
     }
 
     private void exitFullscreen() {
@@ -249,6 +323,11 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (customView != null) { exitFullscreen(); return; }
+        if (sniffPanel != null) {
+            if (sniffWeb != null && sniffWeb.canGoBack()) sniffWeb.goBack();
+            else hideSniff();
+            return;
+        }
         if (loginPanel != null) {
             if (loginWeb != null && loginWeb.canGoBack()) loginWeb.goBack();
             else checkLogin(true);
@@ -284,6 +363,10 @@ public class MainActivity extends Activity {
                         c.setReadTimeout(20000);
                         c.setRequestProperty("User-Agent", UA);
                         c.setRequestProperty("Accept", "application/json, text/html, */*");
+                        try {
+                            String ck = CookieManager.getInstance().getCookie(current);
+                            if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);
+                        } catch (Exception ignored) { }
                         int code = c.getResponseCode();
                         if (code >= 300 && code < 400 && c.getHeaderField("Location") != null) {
                             current = new URL(new URL(current), c.getHeaderField("Location")).toString();
@@ -360,8 +443,18 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String getTokens() {
+            return prefs().getString("tokens", "[]");
+        }
+
+        @JavascriptInterface
+        public void sniff(String pageUrl) {
+            main.post(() -> showSniff(pageUrl));
+        }
+
+        @JavascriptInterface
         public void logout() {
-            prefs().edit().remove("token").apply();
+            prefs().edit().remove("token").remove("tokens").apply();
             main.post(() -> {
                 CookieManager.getInstance().removeAllCookies(null);
                 // Only the login site's storage: keeps the app's saved links.
