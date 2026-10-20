@@ -77,13 +77,16 @@
   pre.debug { text-align: left; white-space: pre-wrap; word-break: break-all; font-size: 11.5px; background: var(--panel);
     padding: 10px; border-radius: 10px; color: var(--dim); max-height: 40vh; overflow: auto; }
 
+  .modal { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; }
+  .sheet { width: 100%; background: var(--panel); border-radius: 18px 18px 0 0; padding: 20px 16px 24px; }
+
   /* Player */
   .player { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; flex-direction: column; }
   .player .top { display: flex; align-items: center; gap: 4px; padding: 8px; background: #000; }
   .player .top .ttl { flex: 1; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .stage { position: relative; background: #000; flex: none; aspect-ratio: 16/9; max-height: 60vh; display: grid; place-items: center; }
   .stage video { width: 100%; height: 100%; background: #000; }
-  .stage .state { position: absolute; inset: 0; display: grid; place-content: center; padding: 20px; }
+  .stage .state { position: absolute; inset: 0; display: grid; place-content: center; padding: 20px; overflow: auto; background: rgba(0,0,0,.72); }
   .controls { display: flex; gap: 8px; padding: 12px; flex-wrap: wrap; background: var(--bg); }
   .controls .btn { flex: 1 1 40%; display: flex; align-items: center; justify-content: center; gap: 8px; }
   .controls svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -182,6 +185,51 @@
   }
   const qs = (o) => Object.entries(o).map(([k, v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&");
 
+  /* ---------- Account (sign-in with the user's own TeleBox account) ---------- */
+  const Auth = {
+    token() {
+      try { if (window.Native && Native.getToken) return Native.getToken() || ""; } catch (e) {}
+      return store.get("token", "");
+    },
+    set(t) {
+      if (window.Native && Native.setToken) Native.setToken(t); else store.set("token", t);
+    },
+    login() {
+      if (window.Native && Native.login) Native.login();
+      else alert("Sign-in works inside the Android app.");
+    },
+    logout() {
+      if (window.Native && Native.logout) Native.logout(); else store.set("token", "");
+    }
+  };
+  let afterLogin = null;
+  window.onLogin = () => {
+    Api.cache.clear();
+    const f = afterLogin; afterLogin = null;
+    if (f) f(); else if (state.view === "home") renderHome();
+  };
+  window.onLoginFailed = (keys) => {
+    afterLogin = null;
+    if (state.view === "home") renderHome();
+    showTokenHelp(keys);
+  };
+
+  function showTokenHelp(keys) {
+    let list = [];
+    try { list = JSON.parse(keys || "[]"); } catch (e) {}
+    const box = document.createElement("div");
+    box.className = "modal";
+    box.innerHTML = `<div class="sheet">
+      <p style="margin:0 0 6px;font-weight:600">Sign-in not detected</p>
+      <p style="margin:0 0 12px;color:var(--dim);font-size:13px">Finish logging in on the TeleBox page (until you see your files), then tap Close. Google sign-in may not work inside apps; use email and password.</p>
+      <details style="margin-bottom:14px"><summary style="color:var(--dim);font-size:12px">What the page stored (${list.length})</summary><pre class="debug">${esc(list.join("\n") || "(nothing)")}</pre></details>
+      <div style="display:flex;gap:8px"><button class="btn ghost" id="mClose" style="flex:1">Cancel</button><button class="btn" id="mRetry" style="flex:1">Try again</button></div>
+    </div>`;
+    document.body.appendChild(box);
+    box.querySelector("#mClose").onclick = () => box.remove();
+    box.querySelector("#mRetry").onclick = () => { box.remove(); Auth.login(); };
+  }
+
   /* ---------- TeleBox / LinkBox API ---------- */
   const Api = {
     share: null,     // { link, token, host }
@@ -219,20 +267,27 @@
       }
       throw lastErr || new Error("Could not load folder");
     },
-    async videoUrl(item, debug) {
+    async videoUrl(item, debug, info) {
       let u = findUrl(item);
       if (u) return u;
       const iid = item.item_id || item.id;
+      const token = Auth.token();
       for (const h of this.hosts()) {
         for (const path of ["/api/file/detail", "/api/file/share_out_detail"]) {
           try {
-            const d = await getJSON(h + path + "?" + qs({ itemId: iid, needUser: 0, needTpInfo: 1, token: "", shareToken: this.share.token }));
+            const d = await getJSON(h + path + "?" + qs({ itemId: iid, needUser: 0, needTpInfo: 1, token, shareToken: this.share.token }));
             u = findUrl(d);
             if (u) return u;
-            debug.push(h + path + ": " + JSON.stringify(d).slice(0, 300));
+            const text = JSON.stringify(d);
+            if (/token in need|not login|login/i.test(String(d && d.msg))) info.needLogin = true;
+            const ii = d && d.data && (d.data.itemInfo || d.data);
+            debug.push(h + path + ": " + (ii && typeof ii === "object"
+              ? "fields = " + Object.keys(ii).join(", ")
+              : text.slice(0, 300)));
           } catch (e) { debug.push(h + path + ": " + e.message); }
         }
       }
+      if (!token) info.needLogin = true;
       return null;
     }
   };
@@ -309,6 +364,12 @@
         <input id="linkInput" type="url" inputmode="url" placeholder="https://lbx.cx/i/..." autocomplete="off">
         <button class="btn" type="submit">Open</button>
       </form>
+      <h3>Account</h3>
+      <div class="row">
+        <div class="grow"><div class="t">${Auth.token() ? "Signed in to TeleBox" : "Not signed in"}</div>
+          <div class="u">${Auth.token() ? "Videos can be streamed" : "Needed to play videos"}</div></div>
+        <button class="btn ${Auth.token() ? "ghost" : ""}" id="acctBtn" style="margin-right:6px">${Auth.token() ? "Sign out" : "Sign in"}</button>
+      </div>
       ${saved.length ? `<h3>Saved links</h3><div class="list">${saved.map((s, i) => `
         <div class="row">
           <button class="grow" data-open="${i}"><div class="t">${esc(s.name || "Shared folder")}</div><div class="u">${esc(s.link)}</div></button>
@@ -319,6 +380,10 @@
       e.preventDefault();
       const v = $("linkInput").value.trim();
       if (v) openShare(v);
+    };
+    $("acctBtn").onclick = () => {
+      if (Auth.token()) { Auth.logout(); Api.cache.clear(); renderHome(); }
+      else { afterLogin = null; Auth.login(); }
     };
     main.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => openShare(saved[b.dataset.open].link));
     main.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => {
@@ -439,6 +504,7 @@
     status(html) {
       $("pState").classList.toggle("hidden", !html);
       $("pState").innerHTML = html || "";
+      video.controls = !html;
     },
     async play() {
       const it = this.list[this.idx];
@@ -449,12 +515,26 @@
       video.poster = it.cover || "";
       this.status('<div class="spinner"></div>Getting link…');
       this.renderQueue();
-      const debug = [];
+      const debug = [], info = {};
       let url = null;
-      try { url = await Api.videoUrl(it, debug); } catch (e) { debug.push(e.message); }
+      try { url = await Api.videoUrl(it, debug, info); } catch (e) { debug.push(e.message); }
       if (my !== this.token) return;
       if (!url) {
-        this.status(`<p style="color:var(--danger)">No playable link found.</p><pre class="debug">${esc(debug.join("\n\n") || "(no reply)")}</pre>`);
+        const signedIn = !!Auth.token();
+        if (info.needLogin || !signedIn) {
+          this.status(`<div style="max-width:320px">
+            <p style="margin:0 0 6px;font-weight:600">${signedIn ? "Your sign-in has expired" : "Sign in to play videos"}</p>
+            <p style="margin:0 0 14px;color:var(--dim);font-size:13px">TeleBox only gives video links to signed-in accounts. Use your own TeleBox / LinkBox account.</p>
+            <button class="btn" id="pLogin">Sign in</button>
+            <details style="margin-top:12px;text-align:left"><summary style="color:var(--dim);font-size:12px">Details</summary><pre class="debug">${esc(debug.join("\n\n"))}</pre></details></div>`);
+          $("pLogin").onclick = () => {
+            if (signedIn) Auth.logout();
+            afterLogin = () => this.play();
+            Auth.login();
+          };
+        } else {
+          this.status(`<p style="color:var(--danger)">No playable link found.</p><pre class="debug">${esc(debug.join("\n\n") || "(no reply)")}</pre>`);
+        }
         return;
       }
       this.url = url;

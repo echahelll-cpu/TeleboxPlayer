@@ -15,6 +15,12 @@ import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.content.SharedPreferences;
+import android.view.Gravity;
+import android.webkit.CookieManager;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -45,6 +51,24 @@ public class MainActivity extends Activity {
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private final Handler main = new Handler(Looper.getMainLooper());
     private String pendingShared;
+    private LinearLayout loginPanel;
+    private WebView loginWeb;
+    private TextView loginStatus;
+
+    static final String LOGIN_URL = "https://www.linkbox.to/admin/account";
+
+    /** Looks through the signed-in site's storage and cookies for its session token. */
+    static final String FIND_TOKEN_JS =
+            "(function(){try{var keys=[];var best='';"
+            + "function look(k,v,d){if(d>4||v==null)return;"
+            + " if(typeof v==='string'){var t=v.trim();"
+            + "  if((t[0]==='{'||t[0]==='[')&&d<4){try{look(k,JSON.parse(t),d+1);}catch(e){}return;}"
+            + "  if(/token/i.test(k)&&/^[A-Za-z0-9._\\-]{16,}$/.test(t)&&t.length>best.length)best=t;return;}"
+            + " if(typeof v==='object'){for(var x in v){look(x,v[x],d+1);}}}"
+            + "[localStorage,sessionStorage].forEach(function(s){for(var i=0;i<s.length;i++){var k=s.key(i);keys.push(k);look(k,s.getItem(k),0);}});"
+            + "document.cookie.split(';').forEach(function(c){var p=c.split('=');var k=(p.shift()||'').trim();keys.push('cookie:'+k);"
+            + " look(k,decodeURIComponent(p.join('=')),0);});"
+            + "return JSON.stringify({token:best,keys:keys});}catch(e){return JSON.stringify({token:'',keys:[String(e)]});}})()";
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -87,6 +111,87 @@ public class MainActivity extends Activity {
 
         pendingShared = extractShared(getIntent());
         web.loadUrl("file:///android_asset/index.html");
+    }
+
+    private SharedPreferences prefs() {
+        return getSharedPreferences("telebox", MODE_PRIVATE);
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void showLogin() {
+        if (loginPanel != null) return;
+        CookieManager.getInstance().setAcceptCookie(true);
+
+        loginPanel = new LinearLayout(this);
+        loginPanel.setOrientation(LinearLayout.VERTICAL);
+        loginPanel.setBackgroundColor(Color.parseColor("#0E1116"));
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(24, 16, 16, 16);
+        loginStatus = new TextView(this);
+        loginStatus.setText("Sign in with your TeleBox account");
+        loginStatus.setTextColor(Color.parseColor("#E8ECF1"));
+        loginStatus.setTextSize(15);
+        bar.addView(loginStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button close = new Button(this);
+        close.setText("Close");
+        close.setOnClickListener(v -> checkLogin(true));
+        bar.addView(close);
+        loginPanel.addView(bar);
+
+        loginWeb = new WebView(this);
+        WebSettings s = loginWeb.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setUserAgentString(UA);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(loginWeb, true);
+        loginWeb.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                main.postDelayed(() -> checkLogin(false), 1200);
+            }
+        });
+        loginPanel.addView(loginWeb, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        root.addView(loginPanel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        loginWeb.loadUrl(LOGIN_URL);
+    }
+
+    /** Reads the token from the login page; closes the panel when found (or when closing). */
+    private void checkLogin(boolean closing) {
+        if (loginWeb == null) return;
+        loginWeb.evaluateJavascript(FIND_TOKEN_JS, raw -> {
+            String token = "", keys = "";
+            try {
+                // evaluateJavascript returns a JSON-encoded string
+                String json = new org.json.JSONArray("[" + raw + "]").getString(0);
+                JSONObject o = new JSONObject(json);
+                token = o.optString("token", "");
+                keys = o.optJSONArray("keys") == null ? "" : o.optJSONArray("keys").toString();
+            } catch (Exception ignored) { }
+
+            if (!token.isEmpty()) {
+                prefs().edit().putString("token", token).apply();
+                hideLogin();
+                web.evaluateJavascript("window.onLogin && window.onLogin(" + JSONObject.quote(token) + ")", null);
+                Toast.makeText(this, "Signed in", Toast.LENGTH_SHORT).show();
+            } else if (closing) {
+                hideLogin();
+                web.evaluateJavascript("window.onLoginFailed && window.onLoginFailed(" + JSONObject.quote(keys) + ")", null);
+            }
+        });
+    }
+
+    private void hideLogin() {
+        if (loginPanel == null) return;
+        root.removeView(loginPanel);
+        loginWeb.destroy();
+        loginWeb = null;
+        loginPanel = null;
     }
 
     private void exitFullscreen() {
@@ -135,6 +240,11 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (customView != null) { exitFullscreen(); return; }
+        if (loginPanel != null) {
+            if (loginWeb != null && loginWeb.canGoBack()) loginWeb.goBack();
+            else checkLogin(true);
+            return;
+        }
         web.evaluateJavascript("window.onAndroidBack ? window.onAndroidBack() : false", value -> {
             if (!"true".equals(value)) MainActivity.super.onBackPressed();
         });
@@ -223,6 +333,31 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void toast(String text) {
             main.post(() -> Toast.makeText(MainActivity.this, text, Toast.LENGTH_SHORT).show());
+        }
+
+        @JavascriptInterface
+        public void login() {
+            main.post(MainActivity.this::showLogin);
+        }
+
+        @JavascriptInterface
+        public String getToken() {
+            return prefs().getString("token", "");
+        }
+
+        @JavascriptInterface
+        public void setToken(String t) {
+            prefs().edit().putString("token", t == null ? "" : t.trim()).apply();
+        }
+
+        @JavascriptInterface
+        public void logout() {
+            prefs().edit().remove("token").apply();
+            main.post(() -> {
+                CookieManager.getInstance().removeAllCookies(null);
+                // Only the login site's storage: keeps the app's saved links.
+                android.webkit.WebStorage.getInstance().deleteOrigin("https://www.linkbox.to");
+            });
         }
 
         /** A link shared into the app before the page loaded (consumed once). */
